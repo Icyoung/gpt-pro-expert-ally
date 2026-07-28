@@ -5,6 +5,7 @@
 *.zip
 *.zip.sha256
 .cache/
+.ufoo/
 build/
 dist/
 node_modules/

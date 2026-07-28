@@ -194,20 +194,21 @@ When available, also use
 Core rules:
 
 - Long runtime is normal. Do not hurry, stop, reload, or duplicate the task.
-- Prefer the host-side background hook: it polls internally without returning
-  intermediate state to Codex and wakes Codex only after the current Pro turn
-  is stably complete, or on an explicit blocker or tab failure.
+- Prefer one still-pending host-side monitor call: it polls internally without
+  returning intermediate state to Codex and returns only after the current Pro
+  turn completes, or on an explicit blocker or tab failure.
 - If the host-side hook is unavailable, perform one compact check every ten
   minutes. Do not claim zero-token monitoring.
-- Inside the host hook, sample every five seconds. A sample is complete only
-  when the visible Stop control is absent and the newest assistant-turn
-  fingerprint matches the preceding sample. The Stop control is the sole
-  generation-lifecycle signal; loading/thinking DOM is diagnostic only. Any
-  fingerprint or semantic change while Stop is present remains internal and
-  must not wake Codex.
-- Do not use a heartbeat to wake Codex, and do not call a foreground wait tool
-  after the host hook reports `pro-monitor-armed`; end the Codex turn and let
-  the completion notification resume it.
+- Inside the host hook, sample every five seconds. Observe the visible Stop
+  control at least once, then return `completed` only after it is absent for
+  the configured consecutive samples. The Stop control is the sole
+  generation-lifecycle signal; loading/thinking DOM and assistant fingerprints
+  are diagnostic only.
+- Do not call `yield_control()` or `notify()` from the monitor. Keep the
+  original tool call pending. If its ten-minute host yield window returns a
+  running-cell identifier, resume that exact cell with `functions.wait`.
+- Do not add a bus wake bridge unless the host is proven to inject incremental
+  output from a still-running task. Buffered poll output is not a wake-up.
 - Do not take repeated full DOM snapshots. Take a fresh snapshot only on an
   explicit blocker, locator ambiguity, tab failure, or stable completion.
 - Do not click “Answer now”, “立即回答”, stop-generation, or tool-detail buttons
@@ -225,9 +226,9 @@ Core rules:
 
 Completion requires:
 
-1. generation control is absent;
-2. the newest assistant turn is stable across two observations;
-3. the final response or expected output artifact is visible.
+1. the previously observed generation control is absent for the configured
+   consecutive samples;
+2. the final response or expected output artifact is visible.
 
 On the same fresh completion observation, locate both the newest completed
 assistant turn and its expected download control. Call

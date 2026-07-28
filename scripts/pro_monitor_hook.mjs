@@ -249,17 +249,17 @@ export async function waitForProTurnCompletion(tab, options = {}) {
   const requestedTimeout = Number(options.timeoutMs ?? 15000);
   const timeoutMs = Math.max(1000, Math.min(requestedTimeout, 15000));
   const pollMs = Math.max(250, Math.min(Number(options.pollMs ?? 1000), 5000));
-  const stablePolls = Math.max(
-    2,
-    Math.min(Number(options.stablePolls ?? 2), 10),
+  const absentPolls = Math.max(
+    1,
+    Math.min(Number(options.absentPolls ?? 2), 10),
   );
   const deadline = Date.now() + timeoutMs;
-  let previousFingerprint = null;
-  let stableCount = 0;
+  let seenGenerationControl = false;
+  let absentCount = 0;
 
   while (Date.now() < deadline) {
     const current = await captureProState(tab, options);
-    const { state, fingerprint } = current;
+    const { state } = current;
 
     if (state.status !== "ready") {
       return { reason: "error", ...current };
@@ -267,17 +267,19 @@ export async function waitForProTurnCompletion(tab, options = {}) {
     if (state.blocker.length > 0) {
       return { reason: "blocker", ...current };
     }
-    if (state.generating || !state.assistantTurnPresent) {
-      previousFingerprint = null;
-      stableCount = 0;
-    } else if (fingerprint === previousFingerprint) {
-      stableCount += 1;
-      if (stableCount >= stablePolls) {
+    if (state.generationControlActive) {
+      seenGenerationControl = true;
+      absentCount = 0;
+    } else if (
+      seenGenerationControl ||
+      (state.assistantTurnPresent && state.downloadCandidates.length > 0)
+    ) {
+      absentCount += 1;
+      if (absentCount >= absentPolls) {
         return { reason: "completed", ...current };
       }
     } else {
-      previousFingerprint = fingerprint;
-      stableCount = 1;
+      absentCount = 0;
     }
 
     await new Promise((resolve) => setTimeout(resolve, pollMs));

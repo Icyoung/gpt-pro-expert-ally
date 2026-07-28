@@ -62,10 +62,12 @@ Do not open a native file picker through Computer Use.
 | Candidate completion | stop control absent |
 | Assistant turn | newest visible `[data-message-author-role="assistant"]`; fallback `article[data-turn="assistant"]` |
 
-Candidate completion is not acceptance. Require a stable newest assistant turn
-and the requested output ZIP or an explicit final delivery statement.
-Loading/thinking DOM may change, disappear, or remain visible without changing
-the lifecycle decision.
+After observing active generation, two consecutive samples without the Stop
+control are sufficient to return the pending monitor call. Acceptance remains
+separate: on the fresh completion observation, require the newest assistant
+turn and the requested output ZIP or an explicit final delivery statement.
+Loading/thinking DOM and assistant-text fingerprints may change, disappear, or
+remain visible without changing the lifecycle decision.
 
 At completion, scope both prose extraction and download-control discovery to
 that newest assistant turn. Use `captureLatestAssistantDelivery` from

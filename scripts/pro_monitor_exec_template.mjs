@@ -1,3 +1,4 @@
+// @exec: {"yield_time_ms": 600000, "max_output_tokens": 1200}
 // functions.exec source template. It is not a standalone Node CLI.
 //
 // Before starting this cell, configure the persistent Node browser kernel:
@@ -10,16 +11,18 @@
 //   hookPath:
 //     "/absolute/path/to/gpt-pro-expert-ally/scripts/pro_monitor_hook.mjs",
 //   pollMs: 5000,
-//   stablePolls: 2,
+//   absentPolls: 2,
 // };
 //
-// Do not run another tool in parallel with this yielded cell.
+// Keep this functions.exec call pending. Do not call yield_control(), notify(),
+// or another tool in parallel. If the host returns a running cell after the
+// ten-minute yield window, resume that exact cell with functions.wait.
 
 const nodeToolEntry = ALL_TOOLS.find(
   (entry) => entry.name.includes("node_repl") && entry.name.endsWith("__js"),
 );
 if (!nodeToolEntry) {
-  notify(JSON.stringify({ reason: "error", error: "node_repl tool unavailable" }));
+  text(JSON.stringify({ reason: "error", error: "node_repl tool unavailable" }));
   exit();
 }
 
@@ -64,7 +67,7 @@ try {
 nodeRepl.write(JSON.stringify({
   snapshot: proMonitorSnapshot,
   pollMs: proMonitorConfig.pollMs || 5000,
-  stablePolls: proMonitorConfig.stablePolls || 2
+  absentPolls: proMonitorConfig.absentPolls || 2
 }));
 `;
 
@@ -90,56 +93,56 @@ try {
     1000,
     Math.min(Number(baselineEnvelope.pollMs), 15000),
   );
-  const requiredStablePolls = Math.max(
-    2,
-    Math.min(Number(baselineEnvelope.stablePolls), 10),
+  const requiredAbsentPolls = Math.max(
+    1,
+    Math.min(Number(baselineEnvelope.absentPolls), 10),
   );
 
   if (current.state.status !== "ready") {
-    notify(
-      JSON.stringify({ reason: "error", state: current.state }),
-    );
+    text(JSON.stringify({ reason: "error", state: current.state }));
     exit();
   }
   if (current.state.blocker.length > 0) {
-    notify(JSON.stringify({ reason: "blocker", state: current.state }));
+    text(JSON.stringify({ reason: "blocker", state: current.state }));
     exit();
   }
 
-  text("pro-monitor-armed");
-  yield_control();
-
-  let previousCompletionFingerprint = null;
-  let stableCount = 0;
+  let seenGenerationControl = current.state.generationControlActive;
+  let absentCount = 0;
   for (;;) {
     if (current.state.status !== "ready") {
-      notify(JSON.stringify({ reason: "error", state: current.state }));
+      text(JSON.stringify({ reason: "error", state: current.state }));
       break;
     }
     if (current.state.blocker.length > 0) {
-      notify(JSON.stringify({ reason: "blocker", state: current.state }));
+      text(JSON.stringify({ reason: "blocker", state: current.state }));
       break;
     }
 
-    if (current.state.generating || !current.state.assistantTurnPresent) {
-      previousCompletionFingerprint = null;
-      stableCount = 0;
-    } else if (current.fingerprint === previousCompletionFingerprint) {
-      stableCount += 1;
-      if (stableCount >= requiredStablePolls) {
-        notify(JSON.stringify({ reason: "completed", state: current.state }));
+    if (current.state.generationControlActive) {
+      seenGenerationControl = true;
+      absentCount = 0;
+    } else if (
+      seenGenerationControl ||
+      (
+        current.state.assistantTurnPresent &&
+        current.state.downloadCandidates.length > 0
+      )
+    ) {
+      absentCount += 1;
+      if (absentCount >= requiredAbsentPolls) {
+        text(JSON.stringify({ reason: "completed", state: current.state }));
         break;
       }
     } else {
-      previousCompletionFingerprint = current.fingerprint;
-      stableCount = 1;
+      absentCount = 0;
     }
 
     await new Promise((resolve) => setTimeout(resolve, pollMs));
     current = (await capture()).snapshot;
   }
 } catch (error) {
-  notify(
+  text(
     JSON.stringify({
       reason: "error",
       error: error instanceof Error ? error.message : String(error),

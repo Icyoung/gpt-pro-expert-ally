@@ -6,12 +6,14 @@ not elapsed time.
 ## Polling policy
 
 1. Verify send and generation immediately.
-2. Arm the host-side stable-completion monitor after the initial verification.
-3. Sample every five seconds inside the host cell, without waking Codex for
-   intermediate semantic or fingerprint changes.
-4. Declare the turn complete only after the visible Stop control is absent and
-   the newest assistant-turn fingerprint is identical in two consecutive
-   samples. Loading/thinking DOM is diagnostic only.
+2. Start one still-pending host-side monitor call after the initial
+   verification.
+3. Sample every five seconds inside that call, without returning intermediate
+   semantic or fingerprint changes to Codex.
+4. After observing the visible Stop control, declare the turn complete when it
+   is absent for the configured consecutive samples. The Stop control is the
+   sole lifecycle signal; loading/thinking DOM and assistant fingerprints are
+   diagnostic only.
 5. Do not emit a heartbeat or a full DOM snapshot on every poll.
 6. Snapshot only when an explicit blocker appears, the tab fails, generation is
    stably complete, or a locator becomes ambiguous.
@@ -33,14 +35,14 @@ const event = await monitor.waitForProTurnCompletion(
     expectedArtifact: "task-name-pro-output\\.zip",
     timeoutMs: 15000,
     pollMs: 1000,
-    stablePolls: 2,
+    absentPolls: 2,
   },
 );
 ```
 
 This direct helper is only a short fallback because one in-page CDP evaluation
 is terminated at roughly 20 seconds. The long-running loop belongs in the
-host-side yielded monitor, which invokes `captureProState` repeatedly without
+host-side pending monitor, which invokes `captureProState` repeatedly without
 returning intermediate DOM data to the model.
 
 ## Cheap state fingerprint
@@ -109,11 +111,9 @@ conversation controls merely to stimulate progress.
 
 ## Completion fingerprint
 
-Treat the run as complete only when:
-
-- stop-generation is absent;
-- the newest assistant turn is stable across two observations;
-- the final response or expected artifact control is visible.
+Treat the run as complete when the observed Stop control becomes absent for the
+configured consecutive samples. Then take one fresh observation and require
+the final response or expected artifact control to be visible before download.
 
 Then take one fresh snapshot, scope to the newest assistant turn, and extract
 only that turn. Use `captureLatestAssistantDelivery` to capture its complete
