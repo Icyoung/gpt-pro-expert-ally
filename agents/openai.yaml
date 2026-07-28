@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPT Pro Expert Ally"
+  short_description: "邀请 GPT Pro 大师级外援完成长任务，并由 Codex 独立复验交付"
+  default_prompt: "Use $gpt-pro-expert-ally to package the needed context, bring in ChatGPT Pro as an expert ally, monitor the work, download the result, and independently validate the delivery."

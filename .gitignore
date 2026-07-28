@@ -1,0 +1,11 @@
+.DS_Store
+.env
+.env.*
+*.log
+*.zip
+*.zip.sha256
+.cache/
+build/
+dist/
+node_modules/
+target/
