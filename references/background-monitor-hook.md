@@ -20,6 +20,10 @@ the only early exceptions.
 - Do not emit a periodic heartbeat and do not re-arm on intermediate changes.
 - Notify early only for a visible login/error blocker, missing page/tab, or user
   interruption.
+- A released control binding is not tab loss. On each sample, if the saved tab
+  binding is stale, silently list the user-open in-app tabs, require exactly one
+  exact match for the saved conversation URL, reclaim it, and retry that sample
+  once. Notify only if the exact tab is absent or ambiguous.
 - After the cell yields `pro-monitor-armed`, do not call a foreground wait tool.
   End the Codex turn; the custom completion notification will resume it.
 - Never run another tool in parallel with the monitor cell. If new work needs a
@@ -32,10 +36,11 @@ the Codex in-app Browser by itself.
 Use `scripts/pro_monitor_exec_template.mjs` as the `functions.exec` source when
 that host primitive is available. First configure
 `globalThis.__chatgptProMonitor` in the persistent Node browser kernel with the
-task tab, escaped expected archive name, absolute hook path, `pollMs: 5000`,
-and `stablePolls: 2`. The template yields immediately, stays silent through
-intermediate changes, sends one custom notification on stable completion or an
-explicit exception, and then exits.
+task tab, in-app browser binding, exact saved conversation URL, escaped expected
+archive name, absolute hook path, `pollMs: 5000`, and `stablePolls: 2`. The
+template yields immediately, silently reclaims a released exact-match tab,
+stays silent through intermediate changes, sends one custom notification on
+stable completion or an explicit exception, and then exits.
 
 If the host lacks a yielded/background tool cell with change notifications,
 fall back to one compact state check every ten minutes. Do not claim an

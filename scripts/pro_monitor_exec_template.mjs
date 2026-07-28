@@ -4,6 +4,8 @@
 //
 // globalThis.__chatgptProMonitor = {
 //   tab: proTab,
+//   browser: iab,
+//   conversationUrl: "https://chatgpt.com/c/<conversation-id>",
 //   expectedArtifact: "task-pro-output\\.zip",
 //   hookPath:
 //     "/absolute/path/to/gpt-pro-expert-ally/scripts/pro_monitor_hook.mjs",
@@ -24,14 +26,41 @@ if (!nodeToolEntry) {
 const nodeTool = tools[nodeToolEntry.name];
 const captureCode = `
 var proMonitorConfig = globalThis.__chatgptProMonitor;
-if (!proMonitorConfig?.tab || !proMonitorConfig?.hookPath) {
+if (
+  !proMonitorConfig?.browser ||
+  !proMonitorConfig?.conversationUrl ||
+  !proMonitorConfig?.hookPath
+) {
   throw new Error("missing __chatgptProMonitor browser configuration");
 }
 var proMonitorModule = await import(proMonitorConfig.hookPath);
-var proMonitorSnapshot = await proMonitorModule.captureProState(
-  proMonitorConfig.tab,
-  { expectedArtifact: proMonitorConfig.expectedArtifact }
-);
+var captureConfiguredProTab = async () =>
+  await proMonitorModule.captureProState(
+    proMonitorConfig.tab,
+    { expectedArtifact: proMonitorConfig.expectedArtifact }
+  );
+var proMonitorSnapshot;
+try {
+  if (!proMonitorConfig.tab) throw new Error("Tab not found");
+  proMonitorSnapshot = await captureConfiguredProTab();
+} catch (error) {
+  var captureError = error instanceof Error ? error.message : String(error);
+  if (!/tab not found|stale|closed|released/i.test(captureError)) throw error;
+  var openProTabs = await proMonitorConfig.browser.user.openTabs();
+  var matchingProTabs = openProTabs.filter(
+    (candidate) => candidate.url === proMonitorConfig.conversationUrl
+  );
+  if (matchingProTabs.length !== 1) {
+    throw new Error(
+      "saved Pro conversation tab unavailable or ambiguous: " +
+        proMonitorConfig.conversationUrl
+    );
+  }
+  proMonitorConfig.tab = await proMonitorConfig.browser.user.claimTab(
+    matchingProTabs[0]
+  );
+  proMonitorSnapshot = await captureConfiguredProTab();
+}
 nodeRepl.write(JSON.stringify({
   snapshot: proMonitorSnapshot,
   pollMs: proMonitorConfig.pollMs || 5000,
@@ -47,7 +76,11 @@ const capture = async () => {
   });
   const block = result?.content?.find((item) => item.type === "text");
   if (!block) throw new Error("monitor capture returned no text");
-  return JSON.parse(block.text);
+  try {
+    return JSON.parse(block.text);
+  } catch {
+    throw new Error(`monitor capture failed: ${block.text}`);
+  }
 };
 
 try {

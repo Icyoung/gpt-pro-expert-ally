@@ -96,8 +96,9 @@ An unchanged activity label is not a stall by itself.
 
 - While generation is active: keep the host hook armed regardless of semantic
   changes or elapsed time.
-- If the tab is released: reclaim the exact saved conversation tab when
-  possible.
+- If the control binding is released between host samples: silently reclaim the
+  unique user-open tab whose URL exactly matches the saved conversation URL and
+  retry once. This routine recovery must not wake Codex.
 - If the tab was closed: open the saved exact conversation URL in the authorized
   browser, verify the user message and current state, then resume monitoring.
 - If the page shows an error: preserve the page and report the visible error.

@@ -214,9 +214,12 @@ Core rules:
   merely to obtain progress.
 - Do not send user-facing progress for intermediate Pro activity. The monitor
   remains silent while generation is active.
-- On tab release or browser reconnection, reclaim the same in-app tab or reopen
-  the saved exact conversation URL in the authorized surface. Never resend the
-  original prompt unless the conversation visibly lacks it.
+- If a host sample sees a released tab binding, silently reclaim the unique
+  user-open in-app tab whose URL exactly matches the saved conversation URL and
+  retry once. Wake Codex only when the exact tab is absent or ambiguous. On
+  browser reconnection, reopen the saved exact conversation URL in the
+  authorized surface. Never resend the original prompt unless the conversation
+  visibly lacks it.
 
 ## 8. Capture the completed response and download
 
