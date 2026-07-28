@@ -7,8 +7,8 @@
 //   expectedArtifact: "task-pro-output\\.zip",
 //   hookPath:
 //     "/absolute/path/to/gpt-pro-expert-ally/scripts/pro_monitor_hook.mjs",
-//   heartbeatMs: 600000,
 //   pollMs: 5000,
+//   stablePolls: 2,
 // };
 //
 // Do not run another tool in parallel with this yielded cell.
@@ -34,8 +34,8 @@ var proMonitorSnapshot = await proMonitorModule.captureProState(
 );
 nodeRepl.write(JSON.stringify({
   snapshot: proMonitorSnapshot,
-  heartbeatMs: proMonitorConfig.heartbeatMs || 600000,
-  pollMs: proMonitorConfig.pollMs || 5000
+  pollMs: proMonitorConfig.pollMs || 5000,
+  stablePolls: proMonitorConfig.stablePolls || 2
 }));
 `;
 
@@ -52,39 +52,58 @@ const capture = async () => {
 
 try {
   const baselineEnvelope = await capture();
-  const baseline = baselineEnvelope.snapshot;
-  const heartbeatMs = Math.max(60000, Number(baselineEnvelope.heartbeatMs));
+  let current = baselineEnvelope.snapshot;
   const pollMs = Math.max(
     1000,
     Math.min(Number(baselineEnvelope.pollMs), 15000),
   );
+  const requiredStablePolls = Math.max(
+    2,
+    Math.min(Number(baselineEnvelope.stablePolls), 10),
+  );
 
-  if (
-    baseline.state.status !== "ready" ||
-    baseline.state.blocker.length > 0 ||
-    !baseline.state.generating
-  ) {
+  if (current.state.status !== "ready") {
     notify(
-      JSON.stringify({ reason: "initial-attention", state: baseline.state }),
+      JSON.stringify({ reason: "error", state: current.state }),
     );
+    exit();
+  }
+  if (current.state.blocker.length > 0) {
+    notify(JSON.stringify({ reason: "blocker", state: current.state }));
     exit();
   }
 
   text("pro-monitor-armed");
   yield_control();
 
-  const deadline = Date.now() + heartbeatMs;
+  let previousCompletionFingerprint = null;
+  let stableCount = 0;
   for (;;) {
+    if (current.state.status !== "ready") {
+      notify(JSON.stringify({ reason: "error", state: current.state }));
+      break;
+    }
+    if (current.state.blocker.length > 0) {
+      notify(JSON.stringify({ reason: "blocker", state: current.state }));
+      break;
+    }
+
+    if (current.state.generating || !current.state.assistantTurnPresent) {
+      previousCompletionFingerprint = null;
+      stableCount = 0;
+    } else if (current.fingerprint === previousCompletionFingerprint) {
+      stableCount += 1;
+      if (stableCount >= requiredStablePolls) {
+        notify(JSON.stringify({ reason: "completed", state: current.state }));
+        break;
+      }
+    } else {
+      previousCompletionFingerprint = current.fingerprint;
+      stableCount = 1;
+    }
+
     await new Promise((resolve) => setTimeout(resolve, pollMs));
-    const current = (await capture()).snapshot;
-    if (current.fingerprint !== baseline.fingerprint) {
-      notify(JSON.stringify({ reason: "changed", state: current.state }));
-      break;
-    }
-    if (Date.now() >= deadline) {
-      notify(JSON.stringify({ reason: "heartbeat", state: current.state }));
-      break;
-    }
+    current = (await capture()).snapshot;
   }
 } catch (error) {
   notify(

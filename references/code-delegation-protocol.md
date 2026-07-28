@@ -42,6 +42,13 @@ Send this envelope once, in the first turn of the task conversation. Later
 revision turns carry only evidence and the requested delta; do not inject the
 template again.
 
+If task-relevant local source changes after the first turn, follow
+`incremental-code-sync-protocol.md`. Attach a numbered local-update packet to
+the next source-dependent message instead of pasting an unstructured diff or
+resending the original archive. The packet must identify the exact Pro-known
+snapshot and include `incremental.patch`, changed/deleted path lists, and the
+authoritative current bytes for added or modified files.
+
 ## Permission envelope
 
 Unless the user grants more, Pro may:
@@ -84,6 +91,12 @@ OUTPUT_MANIFEST.sha256
 Reject advice-only answers, partial snippets, missing manifests, or an archive
 that cannot be traced to the input baseline.
 
+Do not reject an otherwise correct implementation only because its archive also
+contains harmless runtime state, caches, generated files, temporary diagnostic
+scripts, or working notes. Codex should remove or quarantine those locally and
+record the cleanup. Request another long Pro run only when the implementation,
+required evidence, security boundary, or acceptance criteria are deficient.
+
 ## Composer envelope
 
 Use a short message; the brief carries the detail:
@@ -110,3 +123,12 @@ Violated requirement: <exact acceptance/invariant>
 Required correction: <smallest complete outcome>
 Return a replacement output ZIP with updated report, patch, and manifest.
 ```
+
+When relevant local code also changed, append the local-update message contract
+and attach the numbered update packet. Keep Pro-caused validation failures
+separate from independently evolved local source. Do not request a separate
+acknowledgement; Codex verifies the replacement output against the sent update.
+
+Keep the same conversation and task contract. Store each replacement in a new
+candidate branch under `codex/gpt-pro/<task-slug>-r<revision>`, so rejected
+revisions remain inspectable and the primary worktree stays untouched.

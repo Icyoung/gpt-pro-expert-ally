@@ -6,14 +6,15 @@ not elapsed time.
 ## Polling policy
 
 1. Verify send and generation immediately.
-2. Arm the host-side semantic monitor after the initial verification.
-3. Wake on a fingerprint change; otherwise return one heartbeat after ten
-   minutes and re-arm. In the current in-app Browser fallback, sample the
-   compact fingerprint every five seconds as the user's selected low-latency
-   mode; this is a DOM read, not a screenshot.
-4. Do not emit a full DOM snapshot on every poll.
-5. Snapshot only when the state fingerprint changes, an error appears, Pro asks
-   for input, generation completes, or a locator becomes ambiguous.
+2. Arm the host-side stable-completion monitor after the initial verification.
+3. Sample every five seconds inside the host cell, without waking Codex for
+   intermediate semantic or fingerprint changes.
+4. Declare the turn complete only after the visible Stop control is absent and
+   the newest assistant-turn fingerprint is identical in two consecutive
+   samples. Loading/thinking DOM is diagnostic only.
+5. Do not emit a heartbeat or a full DOM snapshot on every poll.
+6. Snapshot only when an explicit blocker appears, the tab fails, generation is
+   stably complete, or a locator becomes ambiguous.
 
 Read `background-monitor-hook.md`. The host-side yielded monitor is preferred
 over a blocking model-side sleep loop.
@@ -26,20 +27,21 @@ const monitor = await import("<skill-dir>/scripts/pro_monitor_hook.mjs");
 const initial = await monitor.captureProState(tab, {
   expectedArtifact: "task-name-pro-output\\.zip",
 });
-const event = await monitor.waitForProStateChange(
+const event = await monitor.waitForProTurnCompletion(
   tab,
-  initial.fingerprint,
   {
     expectedArtifact: "task-name-pro-output\\.zip",
     timeoutMs: 15000,
+    pollMs: 1000,
+    stablePolls: 2,
   },
 );
 ```
 
 This direct helper is only a short fallback because one in-page CDP evaluation
-is terminated at roughly 20 seconds. The ten-minute heartbeat belongs in the
+is terminated at roughly 20 seconds. The long-running loop belongs in the
 host-side yielded monitor, which invokes `captureProState` repeatedly without
-returning full DOM data to the model.
+returning intermediate DOM data to the model.
 
 ## Cheap state fingerprint
 
@@ -75,31 +77,25 @@ Conceptual shape:
 }
 ```
 
-Serialize this small object and compare it with the previous fingerprint. Do not
-read the whole conversation body, history sidebar, cookies, storage, or network
-internals.
+Build the completion fingerprint only from the newest assistant turn and its
+matching artifact candidates. Activity labels may still be captured for final
+diagnostics, but must not participate in host wake-up. Do not read the whole
+conversation body, history sidebar, cookies, storage, or network internals.
 
 ## User updates
 
 Report only:
 
 - task sent and Pro verified;
-- a new substantive milestone;
 - a visible blocker or `NEEDS_INPUT`;
-- completion and download;
-- the host-required periodic heartbeat when no milestone changed.
-
-For an unchanged heartbeat, use one sentence. Do not restate the entire plan.
+- completion and download.
 
 ## Stalls and recovery
 
 An unchanged activity label is not a stall by itself.
 
-- Under 10 minutes unchanged with generation active: keep the host hook armed.
-- At 10 minutes: take one fresh snapshot; check visible error, permission,
-  connection, or generation controls.
-- If generation is still active and no blocker is visible: continue waiting
-  without reload or resend.
+- While generation is active: keep the host hook armed regardless of semantic
+  changes or elapsed time.
 - If the tab is released: reclaim the exact saved conversation tab when
   possible.
 - If the tab was closed: open the saved exact conversation URL in the authorized
@@ -115,9 +111,10 @@ conversation controls merely to stimulate progress.
 Treat the run as complete only when:
 
 - stop-generation is absent;
-- the visible active-thinking/loading line is absent;
 - the newest assistant turn is stable across two observations;
 - the final response or expected artifact control is visible.
 
 Then take one fresh snapshot, scope to the newest assistant turn, and extract
-only that turn.
+only that turn. Use `captureLatestAssistantDelivery` to capture its complete
+visible prose and expected download candidates in the same observation before
+starting the download.

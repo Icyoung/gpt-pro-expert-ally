@@ -81,8 +81,12 @@ copy_relative() {
     node_modules|node_modules/*|*/node_modules|*/node_modules/*|\
     target|target/*|*/target|*/target/*|\
     .cache|.cache/*|*/.cache|*/.cache/*|\
+    .runtime|.runtime/*|.runtime-*|.runtime-*/*|*/.runtime|*/.runtime/*|*/.runtime-*|*/.runtime-*/*|\
     __pycache__|__pycache__/*|*/__pycache__|*/__pycache__/*|\
-    .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx)
+    .pytest_cache|.pytest_cache/*|*/.pytest_cache|*/.pytest_cache/*|\
+    .mypy_cache|.mypy_cache/*|*/.mypy_cache|*/.mypy_cache/*|\
+    .ruff_cache|.ruff_cache/*|*/.ruff_cache|*/.ruff_cache/*|\
+    .env|.env.*|*/.env|*/.env.*|*.pyc|*.pyo|*.pem|*.key|*.p12|*.pfx)
       echo "unsafe or excluded path: $relative_path" >&2
       return 1
       ;;
@@ -105,7 +109,12 @@ copy_tracked_scope() {
   while IFS= read -r -d '' tracked_path; do
     found=1
     case "$tracked_path" in
-      .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx)
+      .runtime|.runtime/*|.runtime-*|.runtime-*/*|*/.runtime|*/.runtime/*|*/.runtime-*|*/.runtime-*/*|\
+      __pycache__|__pycache__/*|*/__pycache__|*/__pycache__/*|\
+      .pytest_cache|.pytest_cache/*|*/.pytest_cache|*/.pytest_cache/*|\
+      .mypy_cache|.mypy_cache/*|*/.mypy_cache|*/.mypy_cache/*|\
+      .ruff_cache|.ruff_cache/*|*/.ruff_cache|*/.ruff_cache/*|\
+      .env|.env.*|*/.env|*/.env.*|*.pyc|*.pyo|*.pem|*.key|*.p12|*.pfx)
         continue
         ;;
     esac

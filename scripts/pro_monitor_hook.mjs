@@ -23,6 +23,11 @@ const ACTIVE_THINKING_SELECTOR = [
   '[aria-busy="true"]',
 ].join(",");
 
+const ASSISTANT_TURN_SELECTOR = [
+  '[data-message-author-role="assistant"]',
+  'article[data-turn="assistant"]',
+].join(",");
+
 function normalizeLabels(labels = {}) {
   return {
     stop: Array.isArray(labels.stop) ? labels.stop : DEFAULT_LABELS.stop,
@@ -41,7 +46,18 @@ export async function captureProState(tab, options = {}) {
       labels: pageLabels,
       expectedArtifact: artifactPattern,
       activeThinkingSelector,
+      assistantTurnSelector,
     }) => {
+      const visible = (element) =>
+        !!element && element.getClientRects().length > 0;
+      const compactHash = (value) => {
+        let hash = 2166136261;
+        for (let index = 0; index < value.length; index += 1) {
+          hash ^= value.charCodeAt(index);
+          hash = Math.imul(hash, 16777619);
+        }
+        return (hash >>> 0).toString(16).padStart(8, "0");
+      };
       const main = document.querySelector("main");
       if (!main) {
         return {
@@ -51,7 +67,7 @@ export async function captureProState(tab, options = {}) {
       }
 
       const buttonNames = Array.from(main.querySelectorAll("button"))
-        .filter((button) => button.getClientRects().length > 0)
+        .filter(visible)
         .map((button) =>
           (
             button.getAttribute("aria-label") ||
@@ -63,19 +79,37 @@ export async function captureProState(tab, options = {}) {
       const thinkingLabels = Array.from(
         main.querySelectorAll(activeThinkingSelector),
       )
-        .filter((element) => element.getClientRects().length > 0)
+        .filter(visible)
         .map((element) => (element.textContent || "").trim())
         .filter(Boolean);
       const paragraphs = Array.from(main.querySelectorAll("p"))
-        .filter((paragraph) => paragraph.getClientRects().length > 0)
+        .filter(visible)
         .map((paragraph) => (paragraph.textContent || "").trim())
         .filter(Boolean);
       const links = Array.from(main.querySelectorAll("a"))
-        .filter((link) => link.getClientRects().length > 0)
+        .filter(visible)
         .map((link) => ({
           text: (link.textContent || "").trim(),
           href: link.getAttribute("href") || "",
         }));
+      const assistantTurns = Array.from(
+        main.querySelectorAll(assistantTurnSelector),
+      ).filter(visible);
+      const newestAssistantTurn = assistantTurns.at(-1) || null;
+      const assistantTurnText = newestAssistantTurn
+        ? (newestAssistantTurn.innerText || newestAssistantTurn.textContent || "")
+            .replace(/\s+/g, " ")
+            .trim()
+        : "";
+      const blocker = Array.from(
+        main.querySelectorAll(
+          '[role="alert"], [data-state="error"], [data-testid*="error" i]',
+        ),
+      )
+        .filter(visible)
+        .map((element) => (element.textContent || "").trim())
+        .filter(Boolean)
+        .slice(-3);
 
       const stopSet = new Set(pageLabels.stop);
       const ignored = new Set([...pageLabels.stop, ...pageLabels.ignoredButtons]);
@@ -87,174 +121,170 @@ export async function captureProState(tab, options = {}) {
       const artifactButtons = buttonNames
         .filter((name) => artifactRegex.test(name))
         .map((name) => ({ text: name, href: "", kind: "button" }));
+      const downloadCandidates = links
+        .filter(({ text, href }) => artifactRegex.test(`${text} ${href}`))
+        .map((candidate) => ({ ...candidate, kind: "link" }))
+        .concat(artifactButtons)
+        .slice(-5);
+      const completionFingerprint = JSON.stringify({
+        assistantTurnPresent: newestAssistantTurn !== null,
+        assistantTurnHash: compactHash(assistantTurnText),
+        assistantTurnTextChars: assistantTurnText.length,
+        downloadCandidates,
+      });
       const state = {
         status: "ready",
-        generating: generationControlActive || thinkingActive,
+        // The Stop control is the sole lifecycle signal. Thinking/loading
+        // elements are useful diagnostics but are too noisy for completion.
+        generating: generationControlActive,
         generationControlActive,
         thinkingActive,
+        assistantTurnPresent: newestAssistantTurn !== null,
+        assistantTurnFingerprint: completionFingerprint,
         thinkingLabels: thinkingLabels.slice(-3),
         activity: buttonNames
           .filter((name) => !ignored.has(name))
           .slice(-10),
         lastAssistant: paragraphs.slice(-4),
-        blocker: paragraphs
-          .filter((text) =>
-            /(error|failed|permission|sign in|login|验证码|登录|权限|失败|错误)/i.test(
-              text,
-            ),
-          )
-          .slice(-2),
-        downloadCandidates: links
-          .filter(({ text, href }) => artifactRegex.test(`${text} ${href}`))
-          .map((candidate) => ({ ...candidate, kind: "link" }))
-          .concat(artifactButtons)
-          .slice(-5),
+        blocker,
+        downloadCandidates,
       };
-      return { fingerprint: JSON.stringify(state), state };
+      return { fingerprint: completionFingerprint, state };
     },
     {
       labels,
       expectedArtifact,
       activeThinkingSelector: ACTIVE_THINKING_SELECTOR,
+      assistantTurnSelector: ASSISTANT_TURN_SELECTOR,
     },
     { timeoutMs: 10000 },
   );
 }
 
-export async function waitForProStateChange(
-  tab,
-  previousFingerprint,
-  options = {},
-) {
-  const labels = normalizeLabels(options.labels);
+export async function captureLatestAssistantDelivery(tab, options = {}) {
   const expectedArtifact = options.expectedArtifact || "\\.zip(?:\\b|$)";
-  const requestedTimeout = Number(options.timeoutMs ?? 55000);
-  // One in-page Runtime.evaluate is currently terminated by the in-app
-  // Browser at roughly 20 seconds. Long monitoring belongs in the host-side
-  // yielded monitor; this helper is intentionally a short direct fallback.
-  const timeoutMs = Math.max(1000, Math.min(requestedTimeout, 15000));
+  const maxTextChars = Math.max(
+    1000,
+    Math.min(Number(options.maxTextChars ?? 60000), 250000),
+  );
 
   return tab.playwright.evaluate(
-    async ({
-      labels: pageLabels,
+    ({
       expectedArtifact: artifactPattern,
-      activeThinkingSelector,
-      previous,
-      timeout,
+      assistantTurnSelector,
+      maxText,
     }) => {
-      const capture = () => {
-        const main = document.querySelector("main");
-        if (!main) {
-          const state = { status: "missing-main" };
-          return { fingerprint: JSON.stringify(state), state };
-        }
-
-        const buttonNames = Array.from(main.querySelectorAll("button"))
-          .filter((button) => button.getClientRects().length > 0)
-          .map((button) =>
-            (
-              button.getAttribute("aria-label") ||
-              button.textContent ||
-              ""
-            ).trim(),
-          )
-          .filter(Boolean);
-        const thinkingLabels = Array.from(
-          main.querySelectorAll(activeThinkingSelector),
-        )
-          .filter((element) => element.getClientRects().length > 0)
-          .map((element) => (element.textContent || "").trim())
-          .filter(Boolean);
-        const paragraphs = Array.from(main.querySelectorAll("p"))
-          .filter((paragraph) => paragraph.getClientRects().length > 0)
-          .map((paragraph) => (paragraph.textContent || "").trim())
-          .filter(Boolean);
-        const links = Array.from(main.querySelectorAll("a"))
-          .filter((link) => link.getClientRects().length > 0)
-          .map((link) => ({
-            text: (link.textContent || "").trim(),
-            href: link.getAttribute("href") || "",
-          }));
-
-        const stopSet = new Set(pageLabels.stop);
-        const ignored = new Set([
-          ...pageLabels.stop,
-          ...pageLabels.ignoredButtons,
-        ]);
-        const artifactRegex = new RegExp(artifactPattern, "i");
-        const generationControlActive =
-          main.querySelector('[data-testid="stop-button"]') !== null ||
-          buttonNames.some((name) => stopSet.has(name));
-        const thinkingActive = thinkingLabels.length > 0;
-        const artifactButtons = buttonNames
-          .filter((name) => artifactRegex.test(name))
-          .map((name) => ({ text: name, href: "", kind: "button" }));
-        const state = {
-          status: "ready",
-          generating: generationControlActive || thinkingActive,
-          generationControlActive,
-          thinkingActive,
-          thinkingLabels: thinkingLabels.slice(-3),
-          activity: buttonNames
-            .filter((name) => !ignored.has(name))
-            .slice(-10),
-          lastAssistant: paragraphs.slice(-4),
-          blocker: paragraphs
-            .filter((text) =>
-              /(error|failed|permission|sign in|login|验证码|登录|权限|失败|错误)/i.test(
-                text,
-              ),
-            )
-            .slice(-2),
-          downloadCandidates: links
-            .filter(({ text, href }) => artifactRegex.test(`${text} ${href}`))
-            .map((candidate) => ({ ...candidate, kind: "link" }))
-            .concat(artifactButtons)
-            .slice(-5),
+      const visible = (element) =>
+        !!element && element.getClientRects().length > 0;
+      const main = document.querySelector("main");
+      if (!main) {
+        return {
+          found: false,
+          conversationUrl: location.href,
+          text: "",
+          textTruncated: false,
+          downloadCandidates: [],
+          reason: "missing-main",
         };
-        return { fingerprint: JSON.stringify(state), state };
-      };
-
-      const initial = capture();
-      if (initial.fingerprint !== previous) {
-        return { reason: "changed", ...initial };
       }
 
-      return new Promise((resolve) => {
-        let settled = false;
-        let pollTimer;
-        const finish = (reason, value) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(pollTimer);
-          clearTimeout(heartbeatTimer);
-          resolve({ reason, ...value });
+      const assistantTurns = Array.from(
+        main.querySelectorAll(assistantTurnSelector),
+      ).filter(visible);
+      const turn = assistantTurns.at(-1);
+      if (!turn) {
+        return {
+          found: false,
+          conversationUrl: location.href,
+          text: "",
+          textTruncated: false,
+          downloadCandidates: [],
+          reason: "missing-assistant-turn",
         };
-        const check = () => {
-          const current = capture();
-          if (current.fingerprint !== previous) {
-            finish("changed", current);
-            return;
-          }
-          pollTimer = setTimeout(check, 1000);
-        };
-        // The in-app Browser's isolated evaluation world does not expose a
-        // constructible MutationObserver. This compact in-page poll does not
-        // return DOM data to the model until state changes or the heartbeat
-        // expires.
-        pollTimer = setTimeout(check, 1000);
-        const heartbeatTimer = setTimeout(() => {
-          finish("heartbeat", capture());
-        }, timeout);
-      });
+      }
+
+      const fullText = (turn.innerText || turn.textContent || "").trim();
+      const artifactRegex = new RegExp(artifactPattern, "i");
+      const links = Array.from(turn.querySelectorAll("a"))
+        .filter(visible)
+        .map((link) => ({
+          kind: "link",
+          text: (link.textContent || "").trim(),
+          href: link.getAttribute("href") || "",
+        }))
+        .filter(({ text, href }) => artifactRegex.test(`${text} ${href}`));
+      const buttons = Array.from(turn.querySelectorAll("button"))
+        .filter(visible)
+        .map((button) => ({
+          kind: "button",
+          text: (
+            button.getAttribute("aria-label") ||
+            button.textContent ||
+            ""
+          ).trim(),
+          href: "",
+        }))
+        .filter(({ text }) => artifactRegex.test(text));
+
+      return {
+        found: true,
+        conversationUrl: location.href,
+        text: fullText.slice(0, maxText),
+        textChars: fullText.length,
+        textTruncated: fullText.length > maxText,
+        downloadCandidates: links.concat(buttons),
+        reason: null,
+      };
     },
     {
-      labels,
       expectedArtifact,
-      activeThinkingSelector: ACTIVE_THINKING_SELECTOR,
-      previous: previousFingerprint,
-      timeout: timeoutMs,
+      assistantTurnSelector: ASSISTANT_TURN_SELECTOR,
+      maxText: maxTextChars,
     },
-    { timeoutMs: timeoutMs + 5000 },
+    { timeoutMs: 10000 },
   );
+}
+
+export async function waitForProTurnCompletion(tab, options = {}) {
+  const requestedTimeout = Number(options.timeoutMs ?? 15000);
+  const timeoutMs = Math.max(1000, Math.min(requestedTimeout, 15000));
+  const pollMs = Math.max(250, Math.min(Number(options.pollMs ?? 1000), 5000));
+  const stablePolls = Math.max(
+    2,
+    Math.min(Number(options.stablePolls ?? 2), 10),
+  );
+  const deadline = Date.now() + timeoutMs;
+  let previousFingerprint = null;
+  let stableCount = 0;
+
+  while (Date.now() < deadline) {
+    const current = await captureProState(tab, options);
+    const { state, fingerprint } = current;
+
+    if (state.status !== "ready") {
+      return { reason: "error", ...current };
+    }
+    if (state.blocker.length > 0) {
+      return { reason: "blocker", ...current };
+    }
+    if (state.generating || !state.assistantTurnPresent) {
+      previousFingerprint = null;
+      stableCount = 0;
+    } else if (fingerprint === previousFingerprint) {
+      stableCount += 1;
+      if (stableCount >= stablePolls) {
+        return { reason: "completed", ...current };
+      }
+    } else {
+      previousFingerprint = fingerprint;
+      stableCount = 1;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  return {
+    reason: "timeout",
+    ...(await captureProState(tab, options)),
+  };
 }

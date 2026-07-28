@@ -56,13 +56,21 @@ Do not open a native file picker through Computer Use.
 
 | State | DOM contract |
 |---|---|
-| Pro actively thinking | visible `.loading-shimmer-tertiary`; its text is the current phase |
-| Generation active | thinking line and/or `[data-testid="stop-button"]` |
+| Pro activity diagnostic | visible `.loading-shimmer-tertiary`; its text is informative only |
+| Generation active | visible `[data-testid="stop-button"]`; this is the sole lifecycle signal |
 | Premature-answer affordance | button named `立即回答` / `Answer now`; ignore it |
-| Candidate completion | thinking line absent and stop control absent |
+| Candidate completion | stop control absent |
+| Assistant turn | newest visible `[data-message-author-role="assistant"]`; fallback `article[data-turn="assistant"]` |
 
 Candidate completion is not acceptance. Require a stable newest assistant turn
 and the requested output ZIP or an explicit final delivery statement.
+Loading/thinking DOM may change, disappear, or remain visible without changing
+the lifecycle decision.
+
+At completion, scope both prose extraction and download-control discovery to
+that newest assistant turn. Use `captureLatestAssistantDelivery` from
+`scripts/pro_monitor_hook.mjs`; do not read only the download button and discard
+the surrounding report.
 
 ## Drift policy
 

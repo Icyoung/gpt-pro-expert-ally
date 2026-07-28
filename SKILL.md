@@ -66,7 +66,7 @@ Track these states and retain their evidence:
 ```text
 PREPARED -> PACKAGED -> DRAFTED -> AUTHORIZED -> SENT -> RUNNING
 RUNNING  -> NEEDS_INPUT | COMPLETED
-COMPLETED -> DOWNLOADED -> VERIFIED
+COMPLETED -> CAPTURED -> DOWNLOADED -> VERIFIED
 VERIFIED  -> ACCEPTED | REVISION_REQUIRED | BLOCKED
 ```
 
@@ -75,9 +75,14 @@ Keep, at minimum:
 - browser surface and controlled tab identity;
 - conversation URL;
 - input archive path, size, SHA-256, source commit, and dirty-tree note;
+- the exact source snapshot or extracted packet that Pro currently knows;
+- local-update sequence, changed-path scope, packet SHA-256, and visible sent
+  attachment evidence;
 - exact sent prompt;
 - last meaningful Pro activity fingerprint;
+- saved newest completed assistant response;
 - downloaded artifact paths and SHA-256;
+- validation branch/worktree and both source diffs;
 - independent validation commands and results.
 
 ## 4. Prepare the delegation packet
@@ -107,6 +112,16 @@ For repository work:
 Do not assume Pro can access local paths, private repositories, internal
 services, or prior conversations. Put every necessary source file, fixture,
 measurement, constraint, and reproduction command into the packet.
+
+When task-relevant local code changes after the initial packet, read and follow
+[references/incremental-code-sync-protocol.md](references/incremental-code-sync-protocol.md).
+Before any follow-up that depends on local source, compare the exact bytes Pro
+last received with the current selected local bytes. Prefer
+`scripts/build_incremental_update_bundle.py` and
+[assets/LOCAL_UPDATE_BRIEF.template.md](assets/LOCAL_UPDATE_BRIEF.template.md).
+Send a scoped update packet containing the patch, diffstat, path/delete lists,
+and current full bytes for every added or modified file. Never assume a Git
+commit identifies dirty bytes that were sent previously.
 
 If the request contains multiple independent complex tasks, use separate
 conversation URLs and separate packets. Keep one acceptance contract per
@@ -148,6 +163,15 @@ Inject the task envelope only on the first turn of a delegation. The archive's
 messages in that same conversation contain only the new evidence, correction,
 or answer needed; never resend the base template or source packet blindly.
 
+Before drafting every later source-dependent message, run the incremental sync
+gate. If relevant local bytes changed, attach exactly one numbered local-update
+packet and identify the previous Pro-known snapshot and the new authoritative
+snapshot. Ask Pro to preserve its own unreturned work, silently apply or
+reconcile the delta, and continue the original task without an
+acknowledgement-only response. If Pro is actively generating, record the update
+as pending and wait for completion or `NEEDS_INPUT`; do not interrupt a healthy
+long run merely to push a delta.
+
 Immediately before sending, verify:
 
 - the same foreground tab is controlled;
@@ -170,29 +194,31 @@ When available, also use
 Core rules:
 
 - Long runtime is normal. Do not hurry, stop, reload, or duplicate the task.
-- Prefer the host-side background hook: it polls the compact fingerprint
-  internally and wakes Codex only on a semantic change or a ten-minute
-  heartbeat.
+- Prefer the host-side background hook: it polls internally without returning
+  intermediate state to Codex and wakes Codex only after the current Pro turn
+  is stably complete, or on an explicit blocker or tab failure.
 - If the host-side hook is unavailable, perform one compact check every ten
   minutes. Do not claim zero-token monitoring.
-- In steady state, use one bounded read-only DOM evaluation that returns a small
-  fingerprint: generation control, the visible active-thinking/loading line,
-  last activity labels, last few assistant paragraphs, errors, and download
-  candidates.
-- Do not take repeated full DOM snapshots. Take a fresh snapshot only on a
-  fingerprint change, ambiguity, error, `NEEDS_INPUT`, or completion.
+- Inside the host hook, sample every five seconds. A sample is complete only
+  when the visible Stop control is absent and the newest assistant-turn
+  fingerprint matches the preceding sample. The Stop control is the sole
+  generation-lifecycle signal; loading/thinking DOM is diagnostic only. Any
+  fingerprint or semantic change while Stop is present remains internal and
+  must not wake Codex.
+- Do not use a heartbeat to wake Codex, and do not call a foreground wait tool
+  after the host hook reports `pro-monitor-armed`; end the Codex turn and let
+  the completion notification resume it.
+- Do not take repeated full DOM snapshots. Take a fresh snapshot only on an
+  explicit blocker, locator ambiguity, tab failure, or stable completion.
 - Do not click “Answer now”, “立即回答”, stop-generation, or tool-detail buttons
   merely to obtain progress.
-- Send user-facing progress only for meaningful milestones or at the host's
-  required update cadence. Do not repeat unchanged status.
-- On an unchanged ten-minute heartbeat while generation remains active, check
-  the compact blocker fields. Take a fresh snapshot only if they are ambiguous
-  or non-empty; otherwise re-arm the monitor.
+- Do not send user-facing progress for intermediate Pro activity. The monitor
+  remains silent while generation is active.
 - On tab release or browser reconnection, reclaim the same in-app tab or reopen
   the saved exact conversation URL in the authorized surface. Never resend the
   original prompt unless the conversation visibly lacks it.
 
-## 8. Read and download the completed result
+## 8. Capture the completed response and download
 
 Completion requires:
 
@@ -200,10 +226,18 @@ Completion requires:
 2. the newest assistant turn is stable across two observations;
 3. the final response or expected output artifact is visible.
 
-Extract only the newest completed assistant response. Locate the expected
-download control from the fresh snapshot, verify uniqueness, start the browser's
-download wait before clicking, and download once. Do not navigate directly to a
-derived asset URL.
+On the same fresh completion observation, locate both the newest completed
+assistant turn and its expected download control. Call
+`captureLatestAssistantDelivery` from `scripts/pro_monitor_hook.mjs`, read the
+assistant's prose, and persist it as task evidence before clicking the download.
+The prose is part of the delivery: extract its root-cause claim, changed files,
+declared hashes, tests, skipped checks, and remaining risks. A visible download
+path alone is not a complete handoff.
+
+Then verify the download control is unique, start the browser's download wait
+before clicking, and download once. Do not navigate directly to a derived asset
+URL. Compare the downloaded size and SHA-256 with any values stated in the
+assistant response and `PRO_REPORT.md`.
 
 If Pro returns prose without the required archive, treat that as an incomplete
 delivery. Prepare a concise corrective message citing the missing contract; send
@@ -218,19 +252,46 @@ Never apply Pro's archive directly over a dirty primary worktree.
    unexpected binaries, absolute local paths, symlinks, and path traversal.
 3. Verify `PRO_REPORT.md`, `changes.patch`, `OUTPUT_MANIFEST.sha256`, and every
    promised modified file.
-4. Extract into an isolated directory or isolated Git worktree based on the
-   recorded input commit/current bytes.
-5. Review the patch for scope, protocol/security boundaries, dependencies,
+4. Read [references/validation-branch-protocol.md](references/validation-branch-protocol.md).
+   Put every candidate in a dedicated branch named
+   `codex/gpt-pro/<task-slug>-r<revision>`. Prefer
+   `scripts/prepare_validation_branch.sh`; never validate by overwriting the
+   primary worktree.
+5. Produce and read both diffs:
+   - Pro output versus the exact source bytes sent to Pro;
+   - the candidate branch versus the user's current primary worktree.
+   Use the first to understand Pro's intent and scope, and the second to find
+   integration conflicts with work that continued while Pro was running.
+6. Review the patch for scope, protocol/security boundaries, dependencies,
    lockfiles, durability, recovery, and executable behavior.
-6. Run repository-required formatting, lint, type checks, unit/contract tests,
+7. Run repository-required formatting, lint, type checks, unit/contract tests,
    production builds, and task-specific integration/E2E gates.
-7. Treat simulated/local evidence as simulated/local. Never relabel it as
+8. Treat simulated/local evidence as simulated/local. Never relabel it as
    production validation.
 
-When validation fails, prepare an evidence-bound revision request containing
-exact commands, logs, file locations, observed behavior, and the correct
-constraint. Repeat download and verification until accepted or genuinely
-blocked.
+Classify findings before requesting a revision:
+
+- **Local cleanup, not a Pro revision:** runtime state, caches, bytecode, build
+  output, absolute creator paths in manifests, harmless temporary scripts or
+  notes, redundant reports, formatting, and non-semantic test-fixture lint.
+  Quarantine or remove them locally, record the cleanup, and continue. If the
+  required source compiles, runs, and meets acceptance criteria, do not make Pro
+  spend another long run merely to repack cosmetic or non-runtime extras.
+- **Revision required:** Pro-caused compile/build/test failure, wrong behavior,
+  violated invariant, unsafe dependency or credential content, incomplete
+  implementation, missing required deliverable, or unmet functional,
+  performance, compatibility, durability, recovery, or security criterion.
+- **Blocked:** a required real environment or user-only authentication step is
+  unavailable and no honest local substitute exists.
+
+`REVISION_REQUIRED` is an active loop, not a final report. Persist the rejected
+candidate, re-run the incremental sync gate, then send the exact failing
+evidence and any required local-update packet in the same Pro conversation.
+Let Pro continue from its completed work, monitor it normally, download the
+replacement, create the next
+`codex/gpt-pro/<task-slug>-r<revision>` branch, and re-run the whole validation.
+Continue until `ACCEPTED` or genuinely `BLOCKED`. Do not resend the original
+packet or open a new conversation for an ordinary correction.
 
 ## 10. Finish
 
