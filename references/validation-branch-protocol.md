@@ -1,68 +1,85 @@
 # Validation Branch Protocol
 
-Use one immutable candidate branch per downloaded revision:
+Validate the immutable Git round chain described in
+`git-round-handoff-protocol.md`.
+
+## Round refs
+
+Each revision keeps:
 
 ```text
-codex/gpt-pro/<task-slug>-r1
-codex/gpt-pro/<task-slug>-r2
-...
+codex/gpt-pro/<task>/rN-input
+codex/gpt-pro/<task>/rN-output
+codex/gpt-pro/<task>/rN-local
 ```
 
-The prefix is always `codex/gpt-pro/`. Keep the task slug stable and increment
-the revision only after a replacement Pro delivery.
+The input and output refs are archival. Do not amend, rebase, squash, delete, or
+force-move them. Local work never lands directly on either ref.
 
-## Reconstruct the candidate
+## Import the output
 
-1. Preserve the raw download and its hash outside the repository.
-2. Extract and scan it outside the primary worktree.
-3. Start the candidate branch at the recorded input commit.
-4. Overlay the exact source bytes sent to Pro. This is necessary when the input
-   packet represented a dirty working tree.
-5. Verify and apply `changes.patch`.
-6. Keep runtime/cache/package-control files out of the candidate source tree.
+1. Preserve and hash the raw download outside the repository.
+2. Run `scripts/verify_round_output.py` to safely extract and scan it outside
+   every Git worktree. Preserve its verification report.
+3. Verify `PRO_REPORT.md`, `changes.patch`, `OUTPUT_MANIFEST.sha256`, and all
+   declared source files.
+4. Confirm the effective input branch, commit, tree, and sent archive SHA-256.
+5. With user commit authorization, prefer `scripts/import_round_output.sh`.
+   It creates `rN-output` from the input commit, applies the patch, rejects
+   unsafe/runtime paths, creates one import commit, and verifies its parent.
+6. Keep reports and raw artifacts outside the source commit.
 
-Prefer:
+The output commit must satisfy:
 
-```bash
-scripts/prepare_validation_branch.sh \
-  --repo /path/to/repo \
-  --baseline <input-commit> \
-  --task <task-slug> \
-  --revision 1 \
-  --worktree /path/to/isolated-worktree \
-  --input-tree /path/to/extracted-input-source \
-  --patch /path/to/changes.patch \
-  --report-dir /path/to/validation-evidence
+```text
+parent(rN-output) == effective-rN-input
+worktree(rN-output) == clean
 ```
 
-The helper refuses to overwrite an existing branch, worktree, or report
-directory.
+Use `scripts/prepare_validation_branch.sh` only for historical deliveries that
+predate committed round inputs. Do not use it for a new delegation.
 
-## Read two different diffs
+## Read three comparisons
 
-These diffs answer different questions:
+1. **Input → output**
 
-1. **Pro versus sent input** — What did Pro intend to change? Use the delivered
-   patch, verify it applies to the authoritative sent bytes, and review every
-   changed path.
-2. **Candidate versus current primary worktree** — What would integrating the
-   candidate change now? This catches local work that continued during the long
-   Pro run, including uncommitted changes.
+   ```bash
+   git diff codex/gpt-pro/<task>/rN-input..codex/gpt-pro/<task>/rN-output
+   ```
 
-Do not infer the second diff from the baseline commit alone. Compare actual
-current bytes. Never resolve conflicts by replacing the current primary file
-wholesale.
+   This is the exact imported Pro source change.
 
-## Classify extra files
+2. **Output → next input**
 
-- Remove or quarantine runtime state, caches, bytecode, logs, generated
-  databases, and creator-local manifests.
-- Treat temporary scripts, notes, and reports as reviewable extras, not an
-  automatic rejection.
-- Keep an extra file only if the accepted implementation or its required
-  verification depends on it.
-- Escalate credentials, executable binaries of unknown origin, path traversal,
-  symlinks escaping the tree, or security-boundary violations.
+   ```bash
+   git diff codex/gpt-pro/<task>/rN-output..codex/gpt-pro/<task>/r$((N+1))-input
+   ```
 
-Record every local cleanup in the validation report and accepted archive
-manifest.
+   This is accepted local repair, reconciliation, and next-round scope.
+
+3. **Output → current primary bytes**
+
+   Compare the output worktree with the actual current primary worktree,
+   including uncommitted task-relevant bytes. This reveals independent product
+   drift and integration conflicts.
+
+Never resolve the third comparison by replacing the primary file wholesale.
+
+## Validate
+
+Run repository-required format, lint, type, unit, contract, release build, and
+task-specific integration/E2E checks from the output worktree. Record the exact
+commands and raw results.
+
+Classify extra files:
+
+- remove or quarantine runtime state, caches, bytecode, logs, generated
+  databases, and creator-local manifests;
+- keep temporary scripts or notes only when accepted implementation or
+  verification depends on them;
+- escalate credentials, unknown executable binaries, path traversal, unsafe
+  symlinks, dependency/security boundary changes, or source outside scope.
+
+If validation fails, retain the output ref. Start the next input from that
+output, integrate accepted local fixes, commit the clean source, and send that
+new revision input. Never overwrite or repurpose the rejected round.

@@ -186,6 +186,9 @@ def rewrite_diff_paths(content: bytes) -> bytes:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-tree", required=True, type=Path)
+    parser.add_argument("--base-branch", required=True)
+    parser.add_argument("--base-commit", required=True)
+    parser.add_argument("--base-git-tree", required=True)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--brief", required=True, type=Path)
@@ -214,6 +217,15 @@ def main() -> int:
         fail(f"refusing to overwrite: {output}")
     if not re.fullmatch(r"U[0-9]{3,}", args.update_id):
         fail("update ID must match U001, U002, ...")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", args.base_commit):
+        fail("base commit must be lowercase hexadecimal")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", args.base_git_tree):
+        fail("base Git tree must be lowercase hexadecimal")
+    status_output = run(
+        ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=all"]
+    ).stdout
+    if status_output:
+        fail("current effective input worktree must be clean and committed")
 
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="pro-local-update.") as temporary:
@@ -301,19 +313,21 @@ def main() -> int:
             .stdout.decode()
             .strip()
         )
-        status_output = run(
-            ["git", "-C", str(repo), "status", "--short", "--branch"]
-        ).stdout.decode("utf-8", "replace")
+        current_tree = run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"]
+        ).stdout.decode().strip()
         baseline = (
-            "schema=CHATGPT_PRO_LOCAL_UPDATE_V1\n"
+            "schema=CHATGPT_PRO_LOCAL_UPDATE_V2\n"
             f"update_id={args.update_id}\n"
+            f"base_branch={args.base_branch}\n"
+            f"base_commit={args.base_commit}\n"
+            f"base_tree={args.base_git_tree}\n"
             f"current_commit={head}\n"
+            f"current_tree={current_tree}\n"
             f"current_branch={branch}\n"
-            "current_selected_bytes_are_authoritative=true\n"
+            "current_worktree_clean=true\n"
+            "current_committed_bytes_are_authoritative=true\n"
             f"selected_paths={' '.join(str(path) for path in scopes)}\n"
-            "git_status_begin\n"
-            f"{status_output}"
-            "git_status_end\n"
         )
         (packet / "LOCAL_UPDATE_BASELINE.txt").write_text(
             baseline, encoding="utf-8"

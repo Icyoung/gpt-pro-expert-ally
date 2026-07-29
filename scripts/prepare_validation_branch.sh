@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Legacy reconstruction helper for downloads created before immutable round
+# input/output branches. New delegations must use freeze_round_input.sh and
+# import_round_output.sh.
 readonly BRANCH_PREFIX="codex/gpt-pro"
 
 usage() {

@@ -1,61 +1,67 @@
 # Incremental Local Code Sync Protocol
 
-Use this protocol whenever task-relevant local source changes after ChatGPT Pro
-received its initial packet or a later update.
+Use this protocol when task-relevant local code changes after a round input was
+sent to ChatGPT Pro. The Git branch chain is authoritative; update packets are
+an exceptional transport, not a substitute for committed round inputs.
 
-## Maintain the Pro-known snapshot
+## Default: queue local work for the next round
 
-Treat the exact archive bytes sent to Pro as generation `U000`. Persist its
-extracted source tree and manifest. After each accepted local update, advance
-the generation (`U001`, `U002`, ...) when the attachment is visibly present in
-the sent user message. Do not spend a separate Pro turn asking for an
-application receipt.
+After sending `codex/gpt-pro/<task>/rN-input`:
 
-For every generation, retain:
+1. Freeze that branch and commit permanently.
+2. Create `codex/gpt-pro/<task>/rN-local` from the input commit.
+3. Commit task-relevant local fixes on the local branch while Pro runs.
+4. Do not interrupt or update a healthy Pro generation.
+5. When Pro returns, import its verified patch into `rN-output` whose direct
+   parent is the input commit.
+6. Create `r(N+1)-input` from `rN-output`, reconcile accepted `rN-local`
+   commits, run checks, and commit the exact clean next input.
+7. Package and send that new input commit in the same Pro conversation.
 
-- previous and new source snapshot identifiers;
-- selected path scope;
-- update ZIP path, size, and SHA-256;
-- `incremental.patch`, diffstat, changed paths, and deleted paths;
-- the exact follow-up message and visible sent attachment evidence.
+The comparisons remain unambiguous:
 
-Do not use `HEAD` alone as the old snapshot when Pro received dirty or untracked
-bytes. Diff against the preserved extracted packet or the last visibly sent
-update snapshot.
+```text
+rN-input..rN-output       = Pro's imported change
+rN-output..r(N+1)-input   = local correction and integration
+```
 
-## Run the sync gate
+## Mid-round update exception
 
-Before every follow-up that depends on source code:
+Send code while Pro is still on revision N only when Pro reaches
+`NEEDS_INPUT` and cannot safely continue without it. Do not send merely because
+local work exists.
 
-1. Identify the exact snapshot Pro currently knows.
-2. Identify task-relevant local changes since that snapshot.
-3. Exclude unrelated user work, runtime state, caches, build output, databases,
-   browser state, credentials, and environment files.
-4. Compare actual bytes, not only commits or branch names.
-5. If no relevant bytes changed, send no source attachment and state no false
-   baseline change.
-6. If relevant bytes changed, create one numbered update packet.
+For an unavoidable update:
 
-If local work changed while Pro is actively generating, record the update as
-pending. Do not interrupt, stop, reload, or duplicate a healthy run. Attach the
-pending update after completion or when Pro explicitly needs input.
+1. Reconcile the required local commits into a new clean immutable branch:
+   `codex/gpt-pro/<task>/rN-input-uNNN`.
+2. Record its commit and Git tree. Never move the original `rN-input`.
+3. Build the delta from the previous effective input commit to this commit.
+4. Visibly send one numbered packet and record the new effective input commit.
+5. Require the final `rN-output` import commit to use the latest effective input
+   commit as its direct parent.
 
-## Update packet contract
+If the effective input changes more than once, increment `uNNN`. Never identify
+a dirty worktree or an uncommitted byte snapshot as Pro's authoritative source.
+
+## Update packet
 
 Prefer:
 
 ```bash
 python3 scripts/build_incremental_update_bundle.py \
-  --base-tree /path/to/exact-pro-known-source \
-  --repo /path/to/current-worktree \
-  --output /persistent/path/<task>-local-update-u001.zip \
+  --base-tree /path/to/extracted-previous-input \
+  --base-branch codex/gpt-pro/task/rN-input \
+  --base-commit <previous-input-commit> \
+  --base-git-tree <previous-input-tree> \
+  --repo /path/to/clean-rN-input-u001-worktree \
+  --output /persistent/task-rN-input-u001.zip \
   --brief /path/to/LOCAL_UPDATE_BRIEF.md \
   --update-id U001 \
-  --path path/to/relevant/component \
-  --path path/to/another/file
+  --path path/to/relevant/component
 ```
 
-The ZIP contains:
+The packet contains:
 
 ```text
 local-update-packet/
@@ -65,83 +71,50 @@ local-update-packet/
   DIFFSTAT.txt
   CHANGED_PATHS.tsv
   DELETED_PATHS.txt
-  current-files/                 # full current bytes for added/modified files
+  current-files/
   UPDATE_MANIFEST.sha256
 ```
 
-Always provide both the patch and current full files:
+Retain the patch for review and the full current bytes for deterministic
+reconciliation. The builder must reject unsafe paths, symlinks, credentials,
+runtime state, local absolute paths, overwrite, or an empty delta.
 
-- the patch explains intent and is easy to review;
-- full files remove ambiguity when context drift prevents clean patch
-  application;
-- `DELETED_PATHS.txt` makes removals explicit;
-- `CHANGED_PATHS.tsv` is the authoritative scope list.
+The baseline must identify both immutable commits and trees:
 
-The packet builder must refuse unsafe paths, symlinks, unresolved
-credential-like content, local repository paths, archive overwrite, or an empty
-delta. Persist the ZIP digest beside it.
+- previous effective input branch/commit/tree;
+- new effective input branch/commit/tree;
+- selected path scope;
+- update ZIP path, size, and SHA-256.
 
-## Choose delta versus refreshed source packet
-
-Use an incremental packet when the previous Pro-known snapshot is preserved and
-the relevant delta is bounded.
-
-Build a fresh sanitized source packet and explicitly reset the Pro-known
-baseline when:
-
-- the exact old bytes cannot be reconstructed;
-- the path scope changed so broadly that the delta is harder to understand than
-  the current source;
-- generated or binary changes cannot be represented safely;
-- a prior attachment send cannot be verified and its effective state is
-  ambiguous;
-- manifest verification fails.
-
-Do not resend the original source packet merely because a revision is needed.
-
-## Follow-up message contract
+## Follow-up message
 
 Use a compact message:
 
 ```text
-Local source update U001 is attached.
-Previous Pro-known snapshot: <identifier/hash>
-New authoritative local snapshot: <commit plus dirty-state/snapshot identifier>
-Relevant reason: <why these local changes affect the task>
+Required source update U001 is attached.
+Previous effective input: <branch, commit, tree>
+New effective input: <branch, commit, tree>
+Reason this blocks continuation: <specific reason>
 
-Open LOCAL_UPDATE_BRIEF.md. Preserve your existing unreturned work, then apply
-or reconcile this delta before continuing. Review incremental.patch, but use
-current-files/ as the authoritative current bytes when patch context differs.
-Do not send an acknowledgement-only reply; continue the original task using
-this update. Only surface a conflict if it prevents safe progress. Do not modify
-unrelated paths.
+Open LOCAL_UPDATE_BRIEF.md and reconcile the delta before continuing. Preserve
+your unreturned work. Use current-files/ as authoritative if patch context
+differs. Do not send an acknowledgement-only reply; continue the original task.
+Only surface a conflict if it prevents safe progress.
 ```
 
-Combine this with a revision request when both are needed. Keep validation
-failures and local source updates distinct:
+The visible sent attachment is sufficient delivery evidence. Do not spend a
+separate Pro turn requesting an application report.
 
-- validation evidence says why Pro's delivery failed;
-- the update packet says what local source changed independently.
+## Validation
 
-## Avoid an acknowledgement round trip
+Import the replacement only from the latest effective input commit. Verify:
 
-Do not ask Pro to list applied, skipped, or conflicted paths immediately after
-receiving an update. The visible sent attachment is sufficient delivery
-evidence. Codex later verifies incorporation by comparing Pro's replacement
-output with the authoritative update snapshot and running the acceptance gates.
+1. output commit parent equals that input commit;
+2. input → output diff is exactly the verified Pro patch after recorded local
+   cleanup;
+3. output → current primary diff reveals independent local drift;
+4. output → next input diff contains only accepted local integration.
 
-Pro should mention a conflict only if it cannot reconcile it safely without
-discarding newer user changes. Codex then resolves the ownership or product
-conflict locally.
-
-## Validation after an update
-
-Each replacement output must still be validated in a new
-`codex/gpt-pro/<task-slug>-r<revision>` branch. Read two comparisons:
-
-1. Pro output versus the latest update generation visibly sent to it.
-2. Candidate versus the user's current primary worktree.
-
-If the primary worktree advanced again, run the sync gate before the next
-source-dependent message. Never overwrite the current primary file wholesale to
-resolve drift.
+If the previous effective input cannot be reconstructed or attachment delivery
+is ambiguous, stop using an incremental packet. Create a new revision input
+branch and send a fresh sanitized source packet instead.

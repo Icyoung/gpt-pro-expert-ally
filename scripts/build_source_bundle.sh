@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 --repo DIR --output FILE.zip --brief FILE [--path TRACKED_RELPATH]... [--include RELPATH]... [--evidence FILE]..." >&2
+  echo "usage: $0 --repo DIR --output FILE.zip --brief FILE [--path TRACKED_RELPATH]... [--include RELPATH]... [--evidence FILE]... [--require-clean] [--expected-branch BRANCH]" >&2
   exit 2
 }
 
@@ -12,6 +12,8 @@ brief_file=""
 tracked_scopes=()
 include_paths=()
 evidence_files=()
+require_clean=0
+expected_branch=""
 
 while (($#)); do
   case "$1" in
@@ -45,6 +47,15 @@ while (($#)); do
       evidence_files+=("$2")
       shift 2
       ;;
+    --require-clean)
+      require_clean=1
+      shift
+      ;;
+    --expected-branch)
+      (($# >= 2)) || usage
+      expected_branch="$2"
+      shift 2
+      ;;
     *)
       usage
       ;;
@@ -60,6 +71,17 @@ command -v rg >/dev/null || { echo "rg is required" >&2; exit 2; }
 command -v zip >/dev/null || { echo "zip is required" >&2; exit 2; }
 
 repo_root="$(cd "$repo_root" && pwd)"
+git_branch="$(git -C "$repo_root" branch --show-current)"
+git_porcelain="$(git -C "$repo_root" status --porcelain --untracked-files=all)"
+if [[ -n "$expected_branch" && "$git_branch" != "$expected_branch" ]]; then
+  echo "expected branch $expected_branch, found $git_branch" >&2
+  exit 2
+fi
+if [[ "$require_clean" -eq 1 && -n "$git_porcelain" ]]; then
+  echo "refusing to package a dirty round-input worktree" >&2
+  exit 2
+fi
+mkdir -p "$(dirname "$output_zip")"
 output_parent="$(cd "$(dirname "$output_zip")" && pwd)"
 output_zip="$output_parent/$(basename "$output_zip")"
 
@@ -176,18 +198,26 @@ cp -p "$brief_file" "$bundle_root/DELEGATION_BRIEF.md"
 
 if git -C "$repo_root" rev-parse --verify HEAD >/dev/null 2>&1; then
   git_head="$(git -C "$repo_root" rev-parse HEAD)"
+  git_tree="$(git -C "$repo_root" rev-parse HEAD^{tree})"
 else
   git_head="UNBORN"
+  git_tree="UNBORN"
 fi
-git_branch="$(git -C "$repo_root" branch --show-current)"
 git_status="$(git -C "$repo_root" status --short --branch)"
 created_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 {
-  echo "schema=CHATGPT_PRO_SOURCE_BASELINE_V1"
+  echo "schema=CHATGPT_PRO_SOURCE_BASELINE_V2"
   echo "created_utc=$created_utc"
   echo "commit=$git_head"
+  echo "tree=$git_tree"
   echo "branch=$git_branch"
+  if [[ -z "$git_porcelain" ]]; then
+    echo "clean_worktree=true"
+  else
+    echo "clean_worktree=false"
+  fi
+  echo "clean_commit_bytes_required=$([[ "$require_clean" -eq 1 ]] && echo true || echo false)"
   echo "current_archive_bytes_are_authoritative=true"
   echo "tracked_scopes=${tracked_scopes[*]:-.}"
   echo "included_untracked_paths=${include_paths[*]:-}"
@@ -241,3 +271,5 @@ echo "archive=$output_zip"
 echo "bytes=$archive_bytes"
 echo "sha256=$archive_sha"
 echo "commit=$git_head"
+echo "tree=$git_tree"
+echo "branch=$git_branch"

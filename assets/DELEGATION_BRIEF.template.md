@@ -6,9 +6,12 @@
 
 ## Repository baseline
 
+- Round input branch: `codex/gpt-pro/<task>/r<N>-input`
 - Commit: `<sha>`
-- Branch: `<branch>`
-- Dirty tree: `<yes/no; current archive bytes are authoritative>`
+- Git tree: `<tree-sha>`
+- Input archive SHA-256: see the adjacent `<archive>.sha256` sidecar generated
+  after packing; record it in Codex's persistent round evidence
+- Clean committed input: `yes`
 - Workspace/toolchain: `<root and relevant versions>`
 
 ## Observed failure or need
@@ -40,8 +43,12 @@ Return `<task>-pro-output.zip` containing:
 
 - the agreed modified source tree;
 - `PRO_REPORT.md`;
-- `changes.patch`;
+- `changes.patch` that applies to the exact round-input commit;
 - `OUTPUT_MANIFEST.sha256`.
+
+Codex will import the verified patch as one `r<N>-output` commit whose direct
+parent is the round-input commit. Do not include `.git` or assume access to the
+user's repository.
 
 ## Required verification
 

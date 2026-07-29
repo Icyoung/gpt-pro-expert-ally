@@ -2,10 +2,12 @@
 
 ## Snapshot transition
 
-- Previous Pro-known snapshot: `<identifier/hash>`
-- New authoritative snapshot: `<commit + dirty state/snapshot identifier>`
+- Previous effective input branch: `<codex/gpt-pro/task/rN-input[-uNNN]>`
+- Previous commit/tree: `<commit> / <tree>`
+- New effective input branch: `<codex/gpt-pro/task/rN-input-uNNN>`
+- New commit/tree: `<commit> / <tree>`
 - Scope: `<task-relevant paths only>`
-- Reason: `<why this local change affects the delegated task>`
+- Blocking reason: `<why Pro cannot safely continue without this update>`
 
 ## Required reconciliation
 
