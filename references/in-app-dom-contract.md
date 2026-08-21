@@ -1,10 +1,10 @@
 # ChatGPT In-App DOM Contract
 
-Observed against the signed-in Chinese ChatGPT UI on 2026-07-28. Prefer stable
-IDs, `data-testid`, roles, and structural scoping. Never persist dynamic
-`radix-*` IDs or generated class names. The one intentional class selector is
-the active-thinking shimmer because the current UI exposes no semantic role for
-that line.
+Observed against the signed-in Chinese ChatGPT UI on 2026-07-28 and updated for
+the 2026-08-21 composer capability UI. Prefer stable IDs, `data-testid`, roles,
+visible labels, and structural scoping. Never persist dynamic `radix-*` IDs or
+generated class names. The one intentional class selector is the active-thinking
+shimmer because the current UI exposes no semantic role for that line.
 
 Use `scripts/chatgpt_dom_contract.mjs` to probe the contract without a screenshot.
 
@@ -39,11 +39,24 @@ ambiguous sidebar duplicate.
 | Prompt editor | `#prompt-textarea[contenteditable="true"][role="textbox"]` scoped to the composer |
 | General upload input | `input#upload-files[type="file"][multiple]` scoped to the composer |
 | Attachment menu button | `button#composer-plus-btn[data-testid="composer-plus-btn"]` scoped to the composer |
-| Model trigger | `button[aria-haspopup="menu"]` scoped to the composer; visible text must equal `Pro` |
-| Selected model in open menu | `[role="menuitemradio"][aria-checked="true"]`; visible text must equal `Pro` |
-| Pro option in open menu | `[role="menuitemradio"]` with exact visible text `Pro` |
+| Chat mode switch | `[role="radio"]` with exact visible text `聊天`; select it before model verification unless the user explicitly requested Work |
+| Model / capability trigger | `button[aria-haspopup="menu"]` scoped to the composer, excluding `#composer-plus-btn`; before max it may read like `5.6 Sol 轻度`; after max it must visibly equal `Pro` |
+| Capability slider | `[role="slider"]` inside the opened model/capability menu; the menu announces “第 N 项，共 5 项。使用左右箭头键调整能力。” |
+| Legacy selected model in open menu | `[role="menuitemradio"][aria-checked="true"]`; visible text must equal `Pro` |
+| Legacy Pro option in open menu | `[role="menuitemradio"]` with exact visible text `Pro` |
 | Send control | `button#composer-submit-button[data-testid="send-button"]`; current Chinese label is `发送提示` |
 | Stop control | `button#composer-submit-button[data-testid="stop-button"]`; current Chinese label is `停止回答` |
+
+Current Chinese UI path to Pro:
+
+1. In the left/top chat interface switcher, choose **聊天** if **工作** is
+   selected.
+2. Open the lower-right composer model/capability trigger.
+3. Push the capability slider to the rightmost/maximum setting.
+4. Verify the composer trigger now displays **Pro**.
+
+Use `ensureChatModeAndMaxPro(tab)` from `scripts/chatgpt_dom_contract.mjs` for
+this path. The old `menuitemradio` `Pro` path is a fallback for older UI only.
 
 The send control is absent while the composer is empty and appears enabled
 after text is present. Verify the attachment group, exact prompt, selected Pro

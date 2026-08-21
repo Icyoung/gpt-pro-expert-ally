@@ -143,12 +143,17 @@ In the chosen ChatGPT tab:
 1. Run the compact recorded DOM-contract probe and confirm an interactive
    ChatGPT UI, composer, prompt editor, upload input, attachment control, and
    visible model state.
-2. Verify **Pro** from the composer-scoped model trigger. If it is not selected,
-   open that trigger, choose the exact `menuitemradio` named **Pro**, and verify
-   `aria-checked="true"`.
-3. Stop if Pro is unavailable, requires purchase, or cannot be verified. Never
+2. If the Chinese ChatGPT UI shows the left-top `聊天` / `工作` switcher, select
+   **聊天** unless the user explicitly requested Work. Then use
+   `ensureChatModeAndMaxPro(tab)` from `scripts/chatgpt_dom_contract.mjs`: open
+   the lower-right composer capability/model trigger, push the capability
+   slider to the maximum/rightmost setting, and verify that the composer-scoped
+   trigger now visibly reads **Pro**.
+3. If the older model menu is shown instead, choose the exact `menuitemradio`
+   named **Pro** and verify `aria-checked="true"`.
+4. Stop if Pro is unavailable, requires purchase, or cannot be verified. Never
    substitute another model silently.
-4. Preserve non-empty composer text. Ask before replacing deliberate user text.
+5. Preserve non-empty composer text. Ask before replacing deliberate user text.
 
 The fresh task tab's home composer is the required starting state. Sending the
 authorized task creates the intended conversation.
